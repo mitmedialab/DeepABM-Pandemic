@@ -7,7 +7,7 @@ import torch
 def get_time_stamped_outdir(path, results_file_postfix, time_format='%Y%m%dT%H%M%S.%f'):
     time_str = datetime.datetime.now().strftime(time_format)
     if len(results_file_postfix) > 0:
-        time_str = time_str + '_' + results_file_postfix
+        time_str = results_file_postfix + '_' + time_str 
     path.append(time_str)
     res = get_dir_from_path_list(path)
     return res
@@ -92,7 +92,7 @@ def custom_watts_strogatz_graph(n, k, p, seed=random):
 
 
 def make_one_hot(tensor, num_dim):
-    onehot = torch.zeros(tensor.shape[0], num_dim)
+    onehot = torch.zeros(tensor.shape[0], num_dim).to(tensor.device)
     onehot.scatter_(1, tensor.view(-1,1).long(), 1)
     return onehot
 

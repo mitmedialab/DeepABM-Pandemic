@@ -9,7 +9,7 @@ from utils import get_dir_from_path_list, make_one_hot, time_dists_split
 from scipy.stats import gamma
 from collections import deque
 from torch_sparse import SparseTensor
-
+import random
 
 def lam(x_i, x_j, edge_attr, t, R, SFSusceptibility, SFInfector, lam_gamma_integrals):
         S_A_s = SFSusceptibility[x_i[:,0].long()]
@@ -25,7 +25,7 @@ def lam(x_i, x_j, edge_attr, t, R, SFSusceptibility, SFInfector, lam_gamma_integ
         # ego_agents_vaccine_protection = torch.distributions.Categorical(
         #     probs = torch.vstack((1-x_i[:,29], x_i[:,29])).t()
         # ).sample().view(-1).long()
-        print(S_A_s.shape, A_s_i.shape, edge_attr[1].shape, integrals.shape, I_bar.shape) #, ego_agents_vaccine_protection.shape)
+        # print(S_A_s.shape, A_s_i.shape, edge_attr[1].shape, integrals.shape, I_bar.shape) #, ego_agents_vaccine_protection.shape)
         # (R*S_A_s*A_s_i*B_n)/(\bar I) * integral
         # res = torch.logical_not(ego_agents_vaccine_protection)*not_quarantined*R*S_A_s*A_s_i*B_n*integrals/I_bar #Edge attribute 1 is B_n
         res = not_quarantined*R*S_A_s*A_s_i*B_n*integrals/I_bar #Edge attribute 1 is B_n
@@ -73,7 +73,7 @@ class TorchABMCovid():
                 self.params['output_location']['parent_dir'],
                 self.params['output_location']['agents_dir'],
                 self.params['output_location']['agents_outfile'])
-        agents_df = pd.read_csv(infile)
+        agents_df = pd.read_csv(infile)  
         self.agents_ages = torch.tensor(agents_df['age_group'].to_numpy()).long().to(self.device) #Assuming age remains constant in the simulation
         self.agents_households = torch.tensor(agents_df['household'].to_numpy()).long().to(self.device) #Assuming occupation remains constant in the simulation
         self.num_networks = 23
@@ -163,6 +163,8 @@ class TorchABMCovid():
         #**********************************************************************************
         #Dynamic
         self.den_contacts = deque([], self.params['max_den_contact_days'])
+        if self.params['use_mct_logic']:
+            self.mct_contacts = deque([], self.params['max_mct_contact_days'])
         #**********************************************************************************
         #**********************************************************************************
         #Agent state variables
@@ -177,7 +179,27 @@ class TorchABMCovid():
         # self.agents_ages = torch.tensor(agents_df['age_group'].to_numpy()).long().to(self.device) #Assuming age remains constant in the simulation
         self.agents_occupation = torch.tensor(agents_df['occupation_network'].to_numpy()).long().to(self.device) #Assuming occupation remains constant in the simulation
         self.agents_app_users = torch.tensor(agents_df['app_user'].to_numpy()).long().to(self.device) #Assuming app user status remains constant in the simulation
-        self.agents_app_users = torch.logical_and(self.agents_app_users.bool(), torch.distributions.Categorical(probs=torch.tensor([1-self.params['app_on_prob'], self.params['app_on_prob']])).sample((self.params['num_agents'],)).bool() ).view(-1)
+        self.agents_app_users = torch.logical_and(self.agents_app_users.bool(), torch.distributions.Categorical(probs=torch.tensor([1-self.params['app_adoption_rate'], self.params['app_adoption_rate']])).sample((self.params['num_agents'],)).bool() ).view(-1)  
+        # assigning app to agnets based on age-based probaility
+        if self.params['use_app_age_dist']:
+            app_user_agewise_probs = [self.params['app_user_agewise_probs_dict'][self.params['age_ix_to_group_dict'][a]] for a in range(len(params['age_groups']))]
+            total_app_users = self.params['app_adoption_rate']*self.params['num_agents']
+            app_assigned = 0
+            all_agents = list(range(self.params['num_agents']))
+            app_users = [False]*len(all_agents)
+            while app_assigned < total_app_users:
+                a_idx = random.choice(all_agents)
+                age_group = self.agents_ages[a_idx]
+                agent_app_prob = app_user_agewise_probs[age_group]
+                get_app = np.random.choice([True, False], p = [agent_app_prob, 1 - agent_app_prob])
+                if get_app:
+                    app_users[a_idx] = True
+                    all_agents.remove(a_idx)
+                    app_assigned += 1
+            self.agents_app_users = torch.tensor(app_users)
+        if self.params['use_mct_logic']:
+            self.agents_mct_reachable = torch.distributions.Categorical(probs=torch.tensor([1-self.params['mct_reachable_prob'], self.params['mct_reachable_prob']])).sample((self.params['num_agents'],)).bool()
+        
 
         #**********************************************************************************
         #Dynamic
@@ -188,11 +210,9 @@ class TorchABMCovid():
         self.agents_test_results_dates = -1*torch.ones(self.params['num_steps']+1, self.params['num_agents']).to(self.device)
         self.last_test_date = -1*torch.zeros(self.params['num_agents']).to(self.device)
 
-        self.den_test_eligibility = torch.ones(self.params['num_agents']).long().to(self.device)
-        if self.params['use_poc_test_logic']:
-            self.den_test_eligibility = torch.zeros(self.params['num_agents']).long().to(self.device)
-        else:
-            self.den_test_eligibility = torch.ones(self.params['num_agents']).long().to(self.device)
+        self.rtpcr_test_eligibility = torch.ones(self.params['num_agents']).long().to(self.device)
+        if self.params['use_poc_test_on_ct_logic']:
+            self.rtpcr_test_eligibility = torch.zeros(self.params['num_agents']).long().to(self.device)
         self.agents_poc_test_results = torch.zeros(self.params['num_steps']+1, self.params['num_agents']).long().to(self.device)
         self.last_poc_test_date = -1*torch.zeros(self.params['num_agents']).to(self.device)
         #b.Quarantine
@@ -204,6 +224,9 @@ class TorchABMCovid():
         self.agents_infected_index = (self.agents_stages > 0).to(self.device) #Not susceptible
         self.agents_infected_time = ((self.params['num_steps']+1)*torch.ones_like(self.agents_stages)).to(self.device) #Practically infinite as np.inf gives wrong data type
         self.agents_infected_time[0, self.agents_infected_index[0].bool()] = 0
+        if self.params['log_full_dynamics']:
+            self.agents_infected_age = torch.zeros(self.params['num_steps'], 9) #age group of infected agents, 9 age groups
+            self.agents_infected_occupation = torch.zeros(self.params['num_steps'], 21) #occupation of infected agents, 9 age groups
         self.agents_next_stages = -1*torch.ones_like(self.agents_stages[0]).to(self.device)
         self.agents_next_stage_times = (self.params['num_steps']+1)*torch.ones_like(self.agents_stages[0]).to(self.device).long() #Practically infinite as np.inf gives wrong data type
         #c. Vaccination
@@ -217,6 +240,10 @@ class TorchABMCovid():
 
         self.agents_vaccination_effectiveness = torch.zeros(self.params['num_steps'] + 1,
                                                             self.params['num_agents']).long().to(self.device)
+        self.num_poc_tests = torch.zeros(self.params['num_steps'])
+        self.num_rtpcr_tests = torch.zeros(self.params['num_steps'])
+        self.num_vaccines = torch.zeros(self.params['num_steps'])
+        
         #**********************************************************************************
         #Household network creation
         #Forward and backward edges need to be added as by default the message passing network is directional
@@ -267,8 +294,8 @@ class TorchABMCovid():
 
     def step(self):
         t = self.current_time
-        print('*'*60)
-        print("This is time {}".format(t))
+        if self.params['debug']:
+            print('*'*60)
         '''
         Timing diagram:
         Agent first updates test results
@@ -340,42 +367,90 @@ class TorchABMCovid():
                 print('Of the negative candidates for test results today {} have tested positive'.format(negative_test_results.sum()))
         #----------------------------------------------------------------------------------
         #1b. Agents get themselves tested
-        den_test_recommended = torch.zeros(self.params['num_agents']).long().to(self.device)
-        for d, edges_d in enumerate(self.den_contacts):
-            den_contact_day = t - len(self.den_contacts) + d
-            test_not_yet_done = self.last_test_date < den_contact_day
-            adj = SparseTensor(row=edges_d[0], col=edges_d[1], 
-                        sparse_sizes=(self.params['num_agents'], self.params['num_agents'])).to(self.device)
-            infectious_neighbors_with_app = torch.logical_and(self.agents_test_results[t,:], self.agents_app_users) #Line which justifies current order
-            infectious_neighbors_with_app = torch.logical_and(infectious_neighbors_with_app, torch.logical_not(self.is_quarantined[den_contact_day,:])) #Line which justifies current order
-            positive_contacts = adj.matmul(infectious_neighbors_with_app.view(-1,1).long()).view(-1)
-            den_test_recommended[torch.logical_and(positive_contacts, test_not_yet_done).bool()] = 1
-            if t > 0: #Addiing logic for poc test contacts sending out with DEN
-                poc_infected_will_inform_den = torch.distributions.Categorical(probs = torch.tensor([1-self.params['poc_den_inform_prob'], self.params['poc_den_inform_prob']])).sample((self.params['num_agents'],)).bool().to(self.device)
-                poc_infectious_neighbors_with_app = torch.logical_and(self.agents_poc_test_results[t-1,:].bool(), self.agents_app_users) #Line which justifies current order
-                poc_infectious_neighbors_with_app = torch.logical_and(poc_infectious_neighbors_with_app, poc_infected_will_inform_den).view(-1).bool()
-                poc_infectious_neighbors_with_app = torch.logical_and(poc_infectious_neighbors_with_app, torch.logical_not(self.is_quarantined[den_contact_day,:])) #Line which justifies current order
-                poc_positive_contacts = adj.matmul(poc_infectious_neighbors_with_app.view(-1,1).long()).view(-1)
-                den_test_recommended[torch.logical_and(poc_positive_contacts, test_not_yet_done).bool()] = 1
-        den_test_recommended = torch.logical_and(den_test_recommended, self.agents_app_users)
-
-        #Adding poc test logic here: - test, get results
-        if (self.params['use_poc_test_logic'] and (t >= self.params['poc_test_start_date'])):
-            if self.params['poc_test_only_for_den']:
-                poc_test_candidates = torch.clone(den_test_recommended)
-            else:
-                poc_test_candidates = torch.ones(self.params['num_agents']).bool().to(self.device)
-                poc_test_candidates = torch.logical_and(poc_test_candidates, self.agents_app_users.bool()).view(-1)
-            poc_test_candidates = torch.logical_and(poc_test_candidates, 
-            torch.distributions.Categorical(probs = 
-            torch.tensor([1-self.params['poc_acceptance_prob'], self.params['poc_acceptance_prob']])).sample((self.params['num_agents'],)).bool()
-            ).view(-1).bool()
+        #section1....................
+        dct_test_recommended = torch.zeros(self.params['num_agents']).long().to(self.device)
+        mct_test_recommended = torch.zeros(self.params['num_agents']).long().to(self.device)
+        
+        #test recommendation logic for dct
+        if self.params['use_den_logic']:
+            for d, edges_d in enumerate(self.den_contacts):
+                den_contact_day = t - len(self.den_contacts) + d
+                test_not_yet_done = self.last_test_date < den_contact_day
+                adj = SparseTensor(row=edges_d[0], col=edges_d[1], 
+                            sparse_sizes=(self.params['num_agents'], self.params['num_agents'])).to(self.device)
+                infectious_neighbors = self.agents_test_results[t,:] #Line which justifies current order
+                #the infected agent need not hae the app in case of GPS
+                # if not self.params['use_gps_logic']:
+                #     infectious_neighbors = torch.logical_and(infectious_neighbors, self.agents_app_users) #Line which justifies current order
+                infectious_neighbors = torch.logical_and(infectious_neighbors, torch.logical_not(self.is_quarantined[den_contact_day,:])) #Line which justifies current order
+                positive_contacts = adj.matmul(infectious_neighbors.view(-1,1).long()).view(-1)
+                dct_test_recommended[torch.logical_and(positive_contacts, test_not_yet_done).bool()] = 1
+                if t > 0: #Addiing logic for poc test contacts sending out with DEN
+                    poc_infected_will_inform_den = torch.distributions.Categorical(probs = torch.tensor([1-self.params['poc_den_inform_prob'], self.params['poc_den_inform_prob']])).sample((self.params['num_agents'],)).bool().to(self.device)
+                    poc_infectious_neighbors = self.agents_poc_test_results[t-1,:]
+                    if not self.params['use_gps_logic']:
+                        poc_infectious_neighbors = torch.logical_and(poc_infectious_neighbors, self.agents_app_users) #Line which justifies current order
+                    poc_infectious_neighbors = torch.logical_and(poc_infectious_neighbors, poc_infected_will_inform_den).view(-1).bool()
+                    poc_infectious_neighbors = torch.logical_and(poc_infectious_neighbors, torch.logical_not(self.is_quarantined[den_contact_day,:])) #Line which justifies current order
+                    poc_positive_contacts = adj.matmul(poc_infectious_neighbors.view(-1,1).long()).view(-1)
+                    dct_test_recommended[torch.logical_and(poc_positive_contacts, test_not_yet_done).bool()] = 1
+                    #the contacted agents of infected need not hae the app in case of GPS-> could be notified through public servers
+                    if not self.params['use_gps_logic']:
+                        dct_test_recommended = torch.logical_and(dct_test_recommended, self.agents_app_users)
+        #same logic for mct
+        if self.params['use_mct_logic']:
+            for d, edges_d in enumerate(self.mct_contacts):
+                den_contact_day = t - len(self.mct_contacts) + d
+                test_not_yet_done = self.last_test_date < den_contact_day
+                adj = SparseTensor(row=edges_d[0], col=edges_d[1], 
+                            sparse_sizes=(self.params['num_agents'], self.params['num_agents'])).to(self.device)
+                infectious_neighbors = torch.logical_and(self.agents_test_results[t,:], self.agents_mct_reachable) #Line which justifies current order
+                infectious_neighbors = torch.logical_and(infectious_neighbors, torch.logical_not(self.is_quarantined[den_contact_day,:])) #Line which justifies current order
+                positive_contacts = adj.matmul(infectious_neighbors.view(-1,1).long()).view(-1)
+                mct_test_recommended[torch.logical_and(positive_contacts, test_not_yet_done).bool()] = 1
+                if t > 0: #Addiing logic for poc test contacts sending out with DEN
+                    poc_infected_will_inform_den = torch.distributions.Categorical(probs = torch.tensor([1-self.params['poc_mct_inform_prob'], self.params['poc_mct_inform_prob']])).sample((self.params['num_agents'],)).bool().to(self.device)
+                    poc_infectious_neighbors = torch.logical_and(self.agents_poc_test_results[t-1,:].bool(), self.agents_mct_reachable) #Line which justifies current order
+                    poc_infectious_neighbors = torch.logical_and(poc_infectious_neighbors, poc_infected_will_inform_den).view(-1).bool()
+                    poc_infectious_neighbors = torch.logical_and(poc_infectious_neighbors, torch.logical_not(self.is_quarantined[den_contact_day,:])) #Line which justifies current order
+                    poc_positive_contacts = adj.matmul(poc_infectious_neighbors.view(-1,1).long()).view(-1)
+                    mct_test_recommended[torch.logical_and(poc_positive_contacts, test_not_yet_done).bool()] = 1
+            mct_test_recommended = torch.logical_and(mct_test_recommended, self.agents_mct_reachable)   
+            mct_will_recall = torch.distributions.Categorical(probs = torch.tensor([1-self.params['mct_recall_prob'], self.params['mct_recall_prob']])).sample((self.params['num_agents'],)).bool()
+            mct_test_recommended = torch.logical_and(mct_test_recommended, mct_will_recall).view(-1).bool()       
+        #section2....................    
+        #Adding poc test logic here for dct, mct, and hybrid: - test, get results
+        if (self.params['use_poc_test_on_ct_logic'] and (t >= self.params['poc_test_start_date'])):
+            # # if self.params['poc_test_only_for_den']: ##############################################not in mct, not reqd on dct
+            #     poc_test_candidates = torch.clone(den_test_recommended)
+            # else:
+            #     poc_test_candidates = torch.ones(self.params['num_agents']).bool().to(self.device)
+            #     poc_test_candidates = torch.logical_and(poc_test_candidates, self.agents_app_users.bool()).view(-1)
+            poc_test_candidates = torch.zeros(self.params['num_agents']).long().to(self.device)
+            if (self.params['use_den_logic']):
+                dct_poc_will_comply = torch.distributions.Categorical(probs = torch.tensor([1-self.params['dct_poc_comply_prob'], self.params['dct_poc_comply_prob']])).sample((self.params['num_agents'],)).bool()
+                dct_poc_test_candidates = torch.logical_and(dct_test_recommended, dct_poc_will_comply)
+                poc_test_candidates = dct_poc_test_candidates            
+            if (self.params['use_mct_logic']):
+                mct_poc_will_comply = torch.distributions.Categorical(probs = torch.tensor([1-self.params['mct_poc_comply_prob'], self.params['mct_poc_comply_prob']])).sample((self.params['num_agents'],)).bool()
+                mct_poc_test_candidates = torch.logical_and(mct_test_recommended, mct_poc_will_comply)
+                poc_test_candidates = mct_poc_test_candidates            
+            #two-step process for hybrid
+            if (self.params['use_hybrid_logic']):
+                dct_missed_poc_test_candidates = torch.logical_and(dct_test_recommended, torch.logical_not(dct_poc_test_candidates))
+                hyb_mct_poc_test_candidates = torch.logical_or(dct_missed_poc_test_candidates, mct_test_recommended)
+                hyb_mct_poc_test_candidates = torch.logical_and(hyb_mct_poc_test_candidates, mct_poc_will_comply)
+                hyrbid_poc_test_candidates = torch.logical_or(hyb_mct_poc_test_candidates, dct_poc_test_candidates)
+                poc_test_candidates = hyrbid_poc_test_candidates           
+            # poc test for symptoms -> same for dct, mct, hybrid
             if not(self.params['poc_test_on_symptoms']):
                 symptomatic_cases = torch.logical_or(self.agents_stages[t,:] == 4, self.agents_stages[t,:] == 5) #Mild or Severe symptoms
                 poc_test_candidates = torch.logical_and(poc_test_candidates, torch.logical_not(symptomatic_cases)).view(-1).bool()
             poc_test_candidates = torch.logical_and(poc_test_candidates, torch.logical_not(self.is_quarantined[t,:])).view(-1)
             poc_test_eligible_stage_agents = self.agents_stages[t,:] <= 5
             poc_test_candidates = torch.logical_and(poc_test_candidates, poc_test_eligible_stage_agents).view(-1)
+            
+            self.num_poc_tests[t] += poc_test_candidates.sum()
             if self.params['debug']:
                 print('There are {} agents for the POC test today'.format(poc_test_candidates.sum()))
             poc_positive_result_candidates = torch.logical_and(
@@ -403,29 +478,59 @@ class TorchABMCovid():
                 print('There are {} negative candidates for test results today'.format(poc_negative_result_candidates.sum()))
                 if poc_negative_result_candidates.sum() > 0:
                     print('Of the negative candidates for test results today {} have tested positive'.format(poc_negative_test_results.sum()))
+        
+        #section3....................    
+        #Continuing non-POC/RTPCR test logic for mct, dct, hyb
+        rtpcr_test_candidates = torch.zeros(self.params['num_agents']).long().to(self.device)
+        if (self.params['use_rtpcr_test_on_ct_logic']):
+            if (self.params['use_den_logic']):
+                dct_test_recommended = torch.logical_and(self.rtpcr_test_eligibility.bool(), dct_test_recommended.bool())
+            if (self.params['use_mct_logic']):
+                mct_test_recommended = torch.logical_and(self.rtpcr_test_eligibility.bool(), mct_test_recommended.bool())
+            if self.params['debug']:
+                if (self.params['use_den_logic']):
+                    print('There are {} agents who have received DEN today'.format(dct_test_recommended.sum()))
+                if (self.params['use_mct_logic']):
+                    print('There are {} agents who were traced in MCT today'.format(mct_test_recommended.sum()))
             
-        #Continuing non POC test logic
-        den_test_recommended = torch.logical_and(self.den_test_eligibility.bool(), den_test_recommended.bool())
-        if self.params['debug']:
-            print('There are {} agents who have received DEN today'.format(den_test_recommended.sum()))
-        den_test_will_comply = torch.distributions.Categorical(
-            probs=torch.tensor([1-self.params['den_will_comply'], self.params['den_will_comply']])).sample((self.params['num_agents'],))
-        den_tests = self.params['use_den_logic']*torch.logical_and(den_test_recommended, den_test_will_comply)
-        if self.params['debug']:
-            print('Of these agents only {} will comply with DEN today'.format(den_tests.sum()))
+            if (self.params['use_den_logic']):
+                dct_rtpcr_test_will_comply = torch.distributions.Categorical(
+                    probs=torch.tensor([1-self.params['dct_rtpcr_comply_prob'], self.params['dct_rtpcr_comply_prob']])).sample((self.params['num_agents'],))
+                dct_rtpcr_tests = self.params['use_den_logic']*torch.logical_and(dct_test_recommended, dct_rtpcr_test_will_comply)
+                rtpcr_test_candidates = dct_rtpcr_tests
+            
+            if (self.params['use_mct_logic']):
+                mct_rtpcr_test_will_comply = torch.distributions.Categorical(
+                    probs=torch.tensor([1-self.params['mct_rtpcr_comply_prob'], self.params['mct_rtpcr_comply_prob']])).sample((self.params['num_agents'],))
+                mct_rtpcr_tests = self.params['use_mct_logic']*torch.logical_and(mct_test_recommended, mct_rtpcr_test_will_comply)
+                rtpcr_test_candidates = mct_rtpcr_tests
+            
+            if (self.params['use_hybrid_logic']):
+                dct_rtpcr_missed_tests = torch.logical_and(dct_test_recommended, torch.logical_not(dct_rtpcr_tests))
+                total_mct_rtpcr_tests = torch.logical_or(dct_rtpcr_missed_tests, mct_test_recommended)
+                mct_rtpcr_tests = self.params['use_hybrid_logic']*torch.logical_and(total_mct_rtpcr_tests, mct_rtpcr_test_will_comply)
+                hyrbid_rtpcr_tests = torch.logical_or(dct_rtpcr_tests, mct_rtpcr_tests)
+                rtpcr_test_candidates = hyrbid_rtpcr_tests
+
+        #same for all cases
         symptomatic_cases = torch.logical_or(self.agents_stages[t,:] == 4, self.agents_stages[t,:] == 5) #Mild or Severe symptoms
         self.agents_test_eligibility[t,symptomatic_cases.bool()] = 1 #Added on Dec 30 night #TODO
         if self.params['debug']:
             print('There are {} agents who have mild or sever symptoms today'.format(symptomatic_cases.sum()))
-        will_take_tests = torch.logical_or(symptomatic_cases, den_tests).view(-1)
-        will_take_tests = torch.logical_and(will_take_tests, torch.logical_not(self.is_quarantined[t,:])).view(-1)
-        if self.params['debug']:
-            print('There are finally {} agents who are supposed to take tests today'.format(will_take_tests.sum()))
-        will_take_tests = torch.logical_and(will_take_tests.bool(), self.agents_test_eligibility[t,:].bool())
-        will_take_tests = torch.logical_and(will_take_tests.bool(), torch.logical_not(self.agents_awaiting_test_results.bool()))
-        test_eligible_stage_agents =  self.agents_stages[t,:] <= 5
-        will_take_tests = torch.logical_and(will_take_tests, test_eligible_stage_agents).view(-1)
+        
+        will_take_tests = torch.zeros(self.params['num_agents']).long().to(self.device)
+        if (self.params['use_rtpcr_test_logic'] and (t >= self.params['rtpcr_test_start_date'])):
+            will_take_tests = torch.logical_or(symptomatic_cases, rtpcr_test_candidates).view(-1)
+            will_take_tests = torch.logical_and(will_take_tests, torch.logical_not(self.is_quarantined[t,:])).view(-1)
+            if self.params['debug']:
+                print('There are finally {} agents who are supposed to take tests today'.format(will_take_tests.sum()))
+            will_take_tests = torch.logical_and(will_take_tests.bool(), self.agents_test_eligibility[t,:].bool())
+            will_take_tests = torch.logical_and(will_take_tests.bool(), torch.logical_not(self.agents_awaiting_test_results.bool()))
+            test_eligible_stage_agents =  self.agents_stages[t,:] <= 5
+            will_take_tests = torch.logical_and(will_take_tests, test_eligible_stage_agents).view(-1)
+        
         self.agents_awaiting_test_results[will_take_tests.bool()] = 1
+        self.num_rtpcr_tests[t] += will_take_tests.sum()
         if self.params['debug']:
             print('Of the agents who are supposed to take tests only {} agents will take tests today as others are awaiting test results'.format(will_take_tests.sum()))
         self.last_test_date[will_take_tests.bool()] = t
@@ -456,19 +561,32 @@ class TorchABMCovid():
         if self.params['debug']:
             print('At this point, before dropping off, {} agents are in quarantine'.format(self.is_quarantined[t,:].sum()))
         #Adding poc quarantine logic
-        poc_agents_will_quarantine = torch.logical_and(
-            self.agents_poc_test_results[t,:].bool(),
-            torch.distributions.Categorical(
-                probs = torch.tensor([1-self.params['poc_quarantine_enter_prob'], self.params['poc_quarantine_enter_prob']])
-            ).sample((self.params['num_agents'],)).bool() 
-        ).view(-1).bool()
+        if self.params['use_poc_test_on_ct_logic']:
+            ct_agents_will_quarantine = self.agents_poc_test_results[t,:].bool()
+            ct_agents_will_quarantine = torch.logical_and(ct_agents_will_quarantine,
+                torch.distributions.Categorical(
+                    probs = torch.tensor([1-self.params['en_quarantine_enter_prob'], self.params['en_quarantine_enter_prob']])
+                ).sample((self.params['num_agents'],)).bool() 
+            ).view(-1).bool()
+        else:
+            dct_agents_will_quarantine = torch.logical_and(dct_test_recommended,
+                torch.distributions.Categorical(
+                    probs = torch.tensor([1-self.params['en_quarantine_enter_prob'], self.params['en_quarantine_enter_prob']])
+                ).sample((self.params['num_agents'],)).bool() 
+            ).view(-1).bool()    
+            mct_agents_will_quarantine = torch.logical_and(mct_test_recommended,
+                torch.distributions.Categorical(
+                    probs = torch.tensor([1-self.params['mct_quarantine_enter_prob'], self.params['mct_quarantine_enter_prob']])
+                ).sample((self.params['num_agents'],)).bool() 
+            ).view(-1).bool()
+            ct_agents_will_quarantine = torch.logical_or(dct_agents_will_quarantine, mct_agents_will_quarantine)
         if self.params['debug']:
-            print('Of the {} POC positively tested agents, {} agents begin a {} day quarantine'.format(self.agents_poc_test_results[t,:].bool().sum(), poc_agents_will_quarantine.bool().sum(), self.params['quarantine_days']))
-        if poc_agents_will_quarantine.bool().sum() > 0:
-            self.quarantine_start_date[poc_agents_will_quarantine.bool()] = t
-            self.is_quarantined[t, poc_agents_will_quarantine.bool()] = 1
+            print('Of the {} POC positively tested agents, {} agents begin a {} day quarantine'.format(self.agents_poc_test_results[t,:].bool().sum(), ct_agents_will_quarantine.bool().sum(), self.params['quarantine_days']))
+        if ct_agents_will_quarantine.bool().sum() > 0:
+            self.quarantine_start_date[ct_agents_will_quarantine.bool()] = t
+            self.is_quarantined[t, ct_agents_will_quarantine.bool()] = 1
         if self.params['debug']:
-            print('At this point, before dropping off, {} agents are in quarantine including {} agents from POC test'.format(self.is_quarantined[t,:].sum(), poc_agents_will_quarantine.sum()))
+            print('At this point, before dropping off, {} agents are in quarantine including {} agents from POC test'.format(self.is_quarantined[t,:].sum(), ct_agents_will_quarantine.sum()))
         #----------------------------------------------------------------------------------
         #2c. Break quarantine
         agents_breaking_quarantine = torch.distributions.Categorical(
@@ -588,6 +706,7 @@ class TorchABMCovid():
             self.quarantine_start_date[agents_getting_first_dose] = self.params['num_steps']+1
             self.is_quarantined[t,agents_getting_second_dose] = 0
             self.quarantine_start_date[agents_getting_second_dose] = self.params['num_steps']+1
+            self.num_vaccines[t] = agents_getting_first_dose.sum() + agents_getting_second_dose.sum()
             #----------------------------------------------------------------------------------
             #3c. After vaccination
             #Computing vaccine effectiveness
@@ -615,6 +734,9 @@ class TorchABMCovid():
         #----------------------------------------------------------------------------------
         #**********************************************************************************
         #4. Infection dynamics
+        if self.params['log_full_dynamics']:
+            self.agents_infected_age[t, :] = torch.bincount(self.agents_ages[self.agents_infected_index[t,:]], minlength=9)
+            self.agents_infected_occupation[t, :] = torch.bincount(self.agents_occupation[self.agents_infected_index[t,:]], minlength = 21)
         #Initializing values to same as last time
         self.agents_stages[t+1, :] = self.agents_stages[t,:]
         self.agents_infected_index[t+1,:] = self.agents_infected_index[t,:]
@@ -671,8 +793,11 @@ class TorchABMCovid():
         random_network_edgeattr_type = self.network_type_dict['random']*torch.ones(random_network_edgelist.shape[1]).long() #22 is the index for random network
         random_network_edgeattr_B_n = torch.ones(random_network_edgelist.shape[1]).float()*self.B_n['random']
         random_network_edgeattr = torch.vstack((random_network_edgeattr_type, random_network_edgeattr_B_n))
-
+        
         all_edgelist = torch.hstack((self.household_network_edgelist, all_occupation_network_edgelist, random_network_edgelist))
+        #edges of random network not used in MCT
+        if self.params['use_mct_logic']:
+            mct_edgelist = torch.hstack((self.household_network_edgelist, all_occupation_network_edgelist.to(self.device)))
         all_edgeattr = torch.hstack((self.household_network_edgeattr, all_occupation_network_edgeattr, random_network_edgeattr))
 
         agents_data = Data(x, edge_index=all_edgelist, edge_attr=all_edgeattr, t=t, agents_mean_interactions = self.agents_mean_interactions)
@@ -717,6 +842,8 @@ class TorchABMCovid():
         #**********************************************************************************
         #6. DEN dynamics
         self.den_contacts.append(torch.clone(all_edgelist))
+        if self.params['use_mct_logic']:
+            self.mct_contacts.append(torch.clone(mct_edgelist))
         #**********************************************************************************
         self.current_time += 1
         
@@ -779,13 +906,27 @@ class TorchABMCovid():
 ########################################################################################################
     def collect_results(self):
         plot_data = np.zeros((self.params['num_steps'],11))
+        infected_till_t = torch.zeros([self.params['num_agents']])
+        infected = []      
         for t in range(self.params['num_steps']):
             plot_data[t,:] = make_one_hot(self.agents_stages[t, :], self.params['num_stages']).sum(axis=0).numpy()
+            if self.params['log_full_dynamics']:
+                infected_t = torch.logical_and(self.agents_stages[t, :]>0, torch.logical_not(infected_till_t)).long()
+                infected_t = infected_t.nonzero().tolist()
+                infected.append(infected_t)
+                infected_till_t = (self.agents_stages[t, :]>0).long()       
         plot_df_columns = list(self.params['stages'])
         plot_df = pd.DataFrame(data = plot_data, columns=plot_df_columns)
         plot_df['INFECTED'] = plot_df.apply(lambda x: sum(x), axis=1)
         plot_df['INFECTED'] -= plot_df['SUSCEPTIBLE']
         plot_df['ACTIVE'] = plot_df['INFECTED'] - plot_df['RECOVERED'] - plot_df['DEATH']
+        plot_df['POC_TESTS'] = self.num_poc_tests
+        plot_df['RTPCR_TESTS'] = self.num_rtpcr_tests
+        plot_df['VACCINE'] = self.num_vaccines
+        if self.params['log_full_dynamics']:
+            plot_df[list(self.params['age_groups'])] = self.agents_infected_age
+            plot_df[list(self.params['occupations_names_list'])] = self.agents_infected_occupation
+            plot_df['INFECTED AGENTS'] = infected
         return plot_df
     
 
