@@ -1,7 +1,5 @@
 # DeepABM: Scalable and Differentiable Agent-based Modeling of Epidemiologic Dynamics and Interventions
 
-This is the github repo for the papers: [First 100 days of pandemic; an interplay of pharmaceutical, behavioral and digital interventions – A study using agent-based modeling](https://arxiv.org/abs/2401.04795)
-
 ## Interventions Supported
 
 - Pharmaceutical: Testing(specificity, speed), Two-dose Vaccination (delay days, efficacy)
@@ -17,11 +15,11 @@ period ends. The interaction graph of quarantine agents is thus an isolated poin
 are not quarantined get vaccinated. Vaccination reduces the susceptibility of an agent to infection risk (3c) In case of contact
 tracing: interactions of the positively tested agents (that own app in case of DCT) from the previous interaction graphs of past
 days are tracked; (4c) exposure notifications are sent to the possibly exposed tracked agents (that own the app in case of DCT);
-(5c) notified agents then opt for self-quarantine. (Last) After simulating for N days, the aggregate statistics of the agent states
+(5c) notified agents then opted for self-quarantine. (Last) After simulating for N days, the aggregate statistics of the agent states
 are computed. Agent states here are: susceptible (S), exposed (E), infected (I), recovered (R), mortal (M), and vaccinated (V)
 
 ## Geographical Spread
-### Infections in Kings County Washington since the beginning of pandemic
+### Infections in Kings County Washington since the beginning of the pandemic
 No Intervention            |  Vaccination+Contact Tracing+Self Quarantine
 :-------------------------:|:-------------------------:
 ![](assets/no_inter.gif) | ![](assets/vacc_ct.gif)
