@@ -46,9 +46,6 @@ We provide configurations for various interventions such as:
 6. `--params_vacc_ct.yaml` for all interventions activated: vaccination, self-quarantine, testing and contact tracing (VACC+ CT)
     
 The parameters in the config can be modified to run different settings
-## Acknowledgements
-
-Our implementation is based on https://arxiv.org/pdf/2110.04421.pdf. We thank the authors for their work.
 
 ## Code used in the following papers:
 1. [Ayush Chopra et al: DeepABM - Scalable and Efficient Agent-based Simulations. Winter Simulation Conference 2021.](https://arxiv.org/abs/2110.04421)
