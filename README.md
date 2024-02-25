@@ -1,6 +1,6 @@
-# First 100 days of pandemic; an interplay of pharmaceutical, behavioral and digital interventions – A study using agent-based modeling
+# DeepABM: Scalable and Differentiable Agent-based Modeling of Epidemiologic Dynamics and Interventions
 
-This is the github repo for the paper: [First 100 days of pandemic; an interplay of pharmaceutical, behavioral and digital interventions – A study using agent-based modeling](https://arxiv.org/abs/2401.04795)
+This is the github repo for the papers: [First 100 days of pandemic; an interplay of pharmaceutical, behavioral and digital interventions – A study using agent-based modeling](https://arxiv.org/abs/2401.04795)
 
 ## Interventions Supported
 
@@ -50,10 +50,19 @@ We provide configurations for various interventions such as:
 The parameters in the config can be modified to run different settings
 ## Acknowledgements
 
-Our implementation is based on [DeepABM](https://arxiv.org/pdf/2110.04421.pdf). We thank the authors for their work.
+Our implementation is based on https://arxiv.org/pdf/2110.04421.pdf. We thank the authors for their work.
 
+## Code used in the following papers:
+1. [Ayush Chopra et al: DeepABM - Scalable and Efficient Agent-based Simulations. Winter Simulation Conference 2021.](https://arxiv.org/abs/2110.04421)
+2. [Romero-brufau, Ayush Chopra et al: Public Health Impact of Delaying 2nd dose of COVID-mRNA vaccine. British Medical Journal 2021.](https://www.bmj.com/content/373/bmj.n1087)
+3. [Gauri Gupta, Ritwik Kapila, Ayush Chopra, Ramesh Raskar: First 100 days of a pandemic - an interplay of clinical, behavioral and digital interventions. AAMAS 2024](https://arxiv.org/abs/2401.04795)
 ## Citation
 ```
+@article{chopra2021deepabm,
+  title={DeepABM: scalable, efficient and differentiable agent-based simulations via graph neural networks},
+  author={Chopra, Ayush and Gel, Esma and Subramanian, Jayakumar and Krishnamurthy, Balaji and Romero-Brufau, Santiago and Pasupathy, Kalyan S and Kingsley, Thomas C and Raskar, Ramesh},
+  journal={arXiv preprint arXiv:2110.04421},
+
 @misc{gupta2024100,
       title={First 100 days of pandemic; an interplay of pharmaceutical, behavioral and digital interventions -- A study using agent based modeling}, 
       author={Gauri Gupta and Ritvik Kapila and Ayush Chopra and Ramesh Raskar},
@@ -65,4 +74,4 @@ Our implementation is based on [DeepABM](https://arxiv.org/pdf/2110.04421.pdf). 
 ```
 
 ## Contact
-Please email: gaurii@mit.edu
+Please email: [ayush + c]@[mit.edu], [gauri + i]@[mit.edu]
