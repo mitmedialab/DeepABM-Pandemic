@@ -15,7 +15,7 @@ https://arxiv.org/pdf/2110.04421.pdf
 ## Code used in the following papers:
 1. Ayush Chopra et al: DeepABM - Scalable and Efficient Agent-based Simulations. Winter Simulation Conference 2021
 2. Romero-brufau, Ayush Chopra et al: Public Health Impact of Delaying 2nd dose of COVID-mRNA vaccine. British Medical Journal 2021.
-3. Gauri Gupta, Ritwik Kapila, Ayush Chopra, Ramesh Raskar: First 100 days of a pandemic - an interplay of clinical, behavioral and digital interventions. AAMAS 2024
+3. Gauri Gupta, Ritvik Kapila, Ayush Chopra, Ramesh Raskar: First 100 days of a pandemic - an interplay of clinical, behavioral and digital interventions. AAMAS 2024
 
 ## Citation
 @article{chopra2021deepabm,
