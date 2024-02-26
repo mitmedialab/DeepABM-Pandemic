@@ -50,7 +50,7 @@ The parameters in the config can be modified to run different settings
 ## Code used in the following papers:
 1. [Ayush Chopra et al: DeepABM - Scalable and Efficient Agent-based Simulations. Winter Simulation Conference 2021.](https://arxiv.org/abs/2110.04421)
 2. [Romero-brufau, Ayush Chopra et al: Public Health Impact of Delaying 2nd dose of COVID-mRNA vaccine. British Medical Journal 2021.](https://www.bmj.com/content/373/bmj.n1087)
-3. [Gauri Gupta, Ritwik Kapila, Ayush Chopra, Ramesh Raskar: First 100 days of a pandemic - an interplay of clinical, behavioral and digital interventions. AAMAS 2024](https://arxiv.org/abs/2401.04795)
+3. [Gauri Gupta, Ritvik Kapila, Ayush Chopra, Ramesh Raskar: First 100 days of a pandemic - an interplay of clinical, behavioral and digital interventions. AAMAS 2024](https://arxiv.org/abs/2401.04795)
 ## Citation
 ```
 @article{chopra2021deepabm,
